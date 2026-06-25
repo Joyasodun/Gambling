@@ -125,19 +125,19 @@ public class Gambling {
                 continue;
             }
 
-            // A hand tracks its total plus how many aces are still counted as 11,
-            // so we can demote them to 1 if the total busts.
+            // Fresh shuffled deck each round, dealt one card at a time.
             // Re-deal the opening hand until it totals 20 or less (no instant 21).
-            int[] player;
+            Deck deck = new Deck(rand);
+            List<Card> player = new ArrayList<>();
             do {
-                player = newHand();
-                addCard(player, drawCard(rand));
-                addCard(player, drawCard(rand));
-            } while (player[0] > 20);
+                player.clear();
+                player.add(deck.deal());
+                player.add(deck.deal());
+            } while (handTotal(player) > 20);
 
-            int[] cpu = newHand();
-            addCard(cpu, drawCard(rand));
-            addCard(cpu, drawCard(rand));
+            List<Card> cpu = new ArrayList<>();
+            cpu.add(deck.deal());
+            cpu.add(deck.deal());
 
             System.out.print("\nDealing cards");
             for (int i = 0; i < 3; i++) {
@@ -146,21 +146,25 @@ public class Gambling {
             }
             System.out.println();
 
-            System.out.println("Your starting total: " + player[0]);
+            System.out.println("Your hand: " + handToString(player)
+                    + "  (total " + handTotal(player) + ")");
+            // Dealer shows one card; the other stays face down until your turn ends.
+            System.out.println("Dealer shows: " + cpu.get(0).name() + " and a face-down card");
 
             boolean busted = false;
-            while (player[0] < 21) {
+            while (handTotal(player) < 21) {
                 System.out.println("Type HIT or STAND:");
                 String choice = scan.nextLine().trim().toUpperCase();
 
                 if (choice.equals("HIT")) {
-                    int card = drawCard(rand);
-                    addCard(player, card);
+                    Card card = deck.deal();
+                    player.add(card);
 
-                    System.out.println("You drew: " + (card == 11 ? "Ace" : card));
-                    System.out.println("New total: " + player[0]);
+                    System.out.println("You drew: " + card.name());
+                    System.out.println("Your hand: " + handToString(player)
+                            + "  (total " + handTotal(player) + ")");
 
-                    if (player[0] > 21) {
+                    if (handTotal(player) > 21) {
                         System.out.println("BUST!");
                         busted = true;
                         break;
@@ -178,14 +182,19 @@ public class Gambling {
                 totalChange -= bet;
                 recordBlackjackResult("LOSE");
             } else {
-                // Dealer draws until reaching at least 17.
-                while (cpu[0] < 17) {
-                    addCard(cpu, drawCard(rand));
+                // Reveal the dealer's hand, then hit until reaching at least 17.
+                System.out.println("\nDealer's hand: " + handToString(cpu)
+                        + "  (total " + handTotal(cpu) + ")");
+                while (handTotal(cpu) < 17) {
+                    Card card = deck.deal();
+                    cpu.add(card);
+                    System.out.println("Dealer draws: " + card.name()
+                            + "  (total " + handTotal(cpu) + ")");
                 }
 
-                System.out.println("\nCPU total: " + cpu[0]);
+                System.out.println("Dealer total: " + handTotal(cpu));
 
-                String result = determineWinner(player[0], cpu[0]);
+                String result = determineWinner(handTotal(player), handTotal(cpu));
                 System.out.println(result);
 
                 if (result.equals("PLAYER WINS")) {
@@ -223,34 +232,89 @@ public class Gambling {
         return totalChange;
     }
 
-    // hand[0] = total, hand[1] = number of aces currently counted as 11
-    private static int[] newHand() {
-        return new int[] {0, 0};
+    // A single playing card: a rank (1=Ace, 11=Jack, 12=Queen, 13=King) and a suit.
+    private static class Card {
+        final int rank; // 1..13
+        final String suit;
+
+        Card(int rank, String suit) {
+            this.rank = rank;
+            this.suit = suit;
+        }
+
+        // Blackjack value: face cards are 10, Ace counts as 11 (demoted later if needed).
+        int value() {
+            if (rank == 1) {
+                return 11; // Ace
+            }
+            if (rank >= 10) {
+                return 10; // 10, Jack, Queen, King
+            }
+            return rank;
+        }
+
+        // e.g. "King of Spades", "7 of Hearts", "Ace of Clubs"
+        String name() {
+            String rankName;
+            switch (rank) {
+                case 1:  rankName = "Ace";   break;
+                case 11: rankName = "Jack";  break;
+                case 12: rankName = "Queen"; break;
+                case 13: rankName = "King";  break;
+                default: rankName = String.valueOf(rank);
+            }
+            return rankName + " of " + suit;
+        }
     }
 
-    private static void addCard(int[] hand, int card) {
-        hand[0] += card;
-        if (card == 11) {
-            hand[1]++;
+    // A real 52-card deck you deal from, so the same card can't appear twice.
+    private static class Deck {
+        private final List<Card> cards = new ArrayList<>();
+        private int next = 0; // index of the next card to deal
+
+        Deck(Random rand) {
+            String[] suits = {"Spades", "Hearts", "Diamonds", "Clubs"};
+            for (String suit : suits) {
+                for (int rank = 1; rank <= 13; rank++) {
+                    cards.add(new Card(rank, suit));
+                }
+            }
+            Collections.shuffle(cards, rand);
         }
-        // Demote aces from 11 to 1 while busting and we still have one to demote.
-        while (hand[0] > 21 && hand[1] > 0) {
-            hand[0] -= 10;
-            hand[1]--;
+
+        // Deal the next card off the top of the deck.
+        Card deal() {
+            return cards.get(next++);
         }
     }
 
-    // Returns 2-10 for number/face cards, or 11 for an Ace.
-    private static int drawCard(Random rand) {
-        int card = rand.nextInt(13) + 1; // 1..13
+    // Adds the cards' values, then demotes aces from 11 to 1 as needed to avoid busting.
+    private static int handTotal(List<Card> hand) {
+        int total = 0;
+        int aces = 0;
+        for (Card c : hand) {
+            total += c.value();
+            if (c.rank == 1) {
+                aces++;
+            }
+        }
+        while (total > 21 && aces > 0) {
+            total -= 10; // count one ace as 1 instead of 11
+            aces--;
+        }
+        return total;
+    }
 
-        if (card == 1) {
-            return 11; // Ace
+    // e.g. "King of Spades, 7 of Hearts"
+    private static String handToString(List<Card> hand) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < hand.size(); i++) {
+            if (i > 0) {
+                sb.append(", ");
+            }
+            sb.append(hand.get(i).name());
         }
-        if (card >= 10) {
-            return 10; // 10, Jack, Queen, King
-        }
-        return card; // 2..9
+        return sb.toString();
     }
 
     private static String determineWinner(int player, int cpu) {
